@@ -137,7 +137,10 @@ class ObjectDressup:
                 job.Proxy.setCenterOfRotation(self.center(obj))
 
     def center(self, obj):
-        return FreeCAD.Vector(0, 0, 0 - obj.Radius.Value)
+        if obj.Base.StartDepth.Value > 0:
+            return FreeCAD.Vector(0, 0, 0)   
+        else:
+            return FreeCAD.Vector(0, 0, 0 - obj.Radius.Value)
 
 
 class TaskPanel:
@@ -276,7 +279,7 @@ class CommandPathDressup:
         FreeCADGui.doCommand('base = FreeCAD.ActiveDocument.' + selection[0].Name)
         FreeCADGui.doCommand('job = PathScripts.PathUtils.findParentJob(base)')
         FreeCADGui.doCommand('obj.Base = base')
-        FreeCADGui.doCommand('obj.Radius = 45')
+        FreeCADGui.doCommand('obj.Radius = (45, obj.Base.StartDepth)[obj.Base.StartDepth > 0]')
         FreeCADGui.doCommand('job.Proxy.addOperation(obj, base)')
         FreeCADGui.doCommand('obj.ViewObject.Proxy = PathScripts.PathDressupAxisMap.ViewProviderDressup(obj.ViewObject)')
         FreeCADGui.doCommand('Gui.ActiveDocument.getObject(base.Name).Visibility = False')
