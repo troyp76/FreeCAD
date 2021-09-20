@@ -70,7 +70,7 @@ class PathSimulation:
         self.debug = False
         self.timer = QtCore.QTimer()
         QtCore.QObject.connect(self.timer, QtCore.SIGNAL("timeout()"), self.PerformCut)
-        self.stdrot = FreeCAD.Rotation(Vector(0, 0, 1), 0)
+        self.initRot = FreeCAD.Rotation(Vector(1, 0, 0), 0)
         self.iprogress = 0
         self.numCommands = 0
         self.simperiod = 20
@@ -103,17 +103,21 @@ class PathSimulation:
         self.onJobChange()
         FreeCADGui.Control.showDialog(self.taskForm)
         self.disableAnim = False
-        self.isVoxel = True
+        self.isVoxel = False
         self.firstDrill = True
         self.voxSim = PathSimulator.PathSim()
         self.SimulateMill()
         self.initdone = True
+        self.moveStillActive = False
+        self.path = None
+        self.rapidFeedrate = 120000/60000
 
     def _populateJobSelection(self, form):
         # Make Job selection combobox
         setJobIdx = 0
         jobName = ''
         jIdx = 0
+        self.jobs.clear()
         # Get list of Job objects in active document
         jobList = FreeCAD.ActiveDocument.findObjects("Path::FeaturePython", "Job.*")
         jCnt = len(jobList)
@@ -193,10 +197,11 @@ class PathSimulation:
                 raise RuntimeError("Path Simulation: Error in tool geometry - {}".format(self.tool.Name))
 
             self.cutTool.ViewObject.show()
-            self.voxSim.SetToolShape(self.cutTool.Shape, 0.05 * self.accuracy)
+            if self.isVoxel: 
+                self.voxSim.SetToolShape(self.cutTool.Shape, 0.05 * self.accuracy)
         self.icmd = 0
-        self.curpos = FreeCAD.Placement(self.initialPos, self.stdrot)
-        self.cutTool.Placement = self.curpos
+        self.curpos = FreeCAD.Placement(self.initialPos, self.initRot)
+        self.cutTool.Placement.Base = self.curpos.Base
         self.opCommands = self.operation.Path.Commands
 
     def SimulateMill(self):
@@ -221,7 +226,7 @@ class PathSimulation:
             self.cutMaterial = FreeCAD.ActiveDocument.addObject("Part::FeaturePython", "CutMaterial")
             self.cutMaterial.Shape = self.job.Stock.Shape
         self.cutMaterial.ViewObject.Proxy = 0
-        self.cutMaterial.ViewObject.show()
+        self.cutMaterial.ViewObject.hide()
         self.cutMaterial.ViewObject.ShapeColor = (0.5, 0.25, 0.25, 0.0)
 
         # Add cut path solid for debug
@@ -248,13 +253,11 @@ class PathSimulation:
 
         if cmd.Name in ['G0']:
             self.firstDrill = True
-            self.curpos = self.RapidMove(cmd, self.curpos)
+            self.curpos = self.RapidMove(cmd, self.curpos)            
+ 
         if cmd.Name in ['G1', 'G2', 'G3']:
             self.firstDrill = True
-            if self.skipStep:
-                self.curpos = self.RapidMove(cmd, self.curpos)
-            else:
-                (pathSolid, self.curpos) = self.GetPathSolid(self.tool, cmd, self.curpos)
+            self.curpos = self.RapidMove(cmd, self.curpos)
 
         if cmd.Name in ['G80']:
             self.firstDrill = True
@@ -281,10 +284,15 @@ class PathSimulation:
                 if self.debug:
                     print("invalid cut at cmd #{}".format(self.icmd))
         if not self.disableAnim:
-            self.cutTool.Placement = FreeCAD.Placement(self.curpos, self.stdrot)
-        self.icmd += 1
-        self.iprogress += 1
-        self.UpdateProgress()
+            self.cutTool.Placement.Base = self.curpos.Base
+            self.operation.Placement.Rotation = self.curpos.Rotation
+            if len(self.job.Model.OutList) == 2 :
+                self.job.Model.OutList[1].Placement.Rotation = self.curpos.Rotation
+        
+        if not self.moveStillActive:        
+            self.icmd += 1
+            self.iprogress += 1
+            self.UpdateProgress()
         if self.icmd >= len(self.operation.Path.Commands):
             self.ioperation += 1
             if self.ioperation >= len(self.activeOps):
@@ -311,7 +319,7 @@ class PathSimulation:
             self.firstDrill = True
             self.curpos = self.voxSim.ApplyCommand(self.curpos, cmd)
             if not self.disableAnim:
-                self.cutTool.Placement = self.curpos
+                self.cutTool.Placement.Base = self.curpos.Base
                 (self.cutMaterial.Mesh, self.cutMaterialIn.Mesh) = self.voxSim.GetResultMesh()
         if cmd.Name in ['G80']:
             self.firstDrill = True
@@ -326,7 +334,7 @@ class PathSimulation:
             for ecmd in extendcommands:
                 self.curpos = self.voxSim.ApplyCommand(self.curpos, ecmd)
                 if not self.disableAnim:
-                    self.cutTool.Placement = self.curpos
+                    self.cutTool.Placement.Base = self.curpos.Base
                     (self.cutMaterial.Mesh, self.cutMaterialIn.Mesh) = self.voxSim.GetResultMesh()
         self.icmd += 1
         self.iprogress += 1
@@ -347,10 +355,57 @@ class PathSimulation:
             self.PerformCutBoolean()
 
     def RapidMove(self, cmd, curpos):
-        path = PathGeom.edgeForCmd(cmd, curpos)  # hack to overcome occ bug
-        if path is None:
-            return curpos
-        return path.valueAt(path.LastParameter)
+
+        newRot = math.degrees(curpos.Rotation.Angle)
+        a = cmd.Parameters.get('A')
+        if a is not None:
+            cmd.Parameters['Y'] = a
+            curpos.Base.y = newRot
+
+        f = cmd.Parameters.get('F')
+        if (f is not None) and (f > 0):
+            maxJump = f/60000 * self.simperiod
+        else:
+            if cmd.Name in ['G0']:
+                maxJump = self.rapidFeedrate * self.simperiod
+            else:
+                maxJump = 2000/60000 * self.simperiod
+
+
+        if self.moveStillActive is False :
+            self.path = PathGeom.edgeForCmd(cmd, curpos.Base)  # hack to overcome occ bug
+
+            if self.path is None:
+                self.moveStillActive = False
+                if a is not None:
+                    cmd.Parameters['Y'] = 0
+                    curpos.Base.y = 0
+                return curpos
+
+            curParameter = self.path.FirstParameter
+
+        else:
+            curParameter = self.path.Curve.parameter(curpos.Base)
+
+        if self.path.Length > maxJump:
+            maxParameterJump = self.path.getParameterByLength(maxJump)
+        else:
+            maxParameterJump = self.path.LastParameter
+
+        if (self.path.LastParameter - curParameter) <= maxParameterJump:
+            self.moveStillActive = False
+            newpos = self.path.valueAt(self.path.LastParameter)
+        else:
+            self.moveStillActive = True
+            newpos = self.path.valueAt(curParameter + maxParameterJump)
+        
+        if a is not None:
+            newRot = newpos.y
+            newpos.y = 0
+ 
+        
+        return FreeCAD.Placement(newpos, FreeCAD.Rotation(Vector(1, 0, 0), newRot))
+
 
     # get a solid representation of a tool going along path
     def GetPathSolid(self, tool, cmd, pos):
@@ -487,6 +542,10 @@ class PathSimulation:
     def EndSimulation(self):
         self.UpdateProgress()
         self.timer.stop()
+        self.operation.Placement.Rotation = FreeCAD.Rotation(Vector(1, 0, 0), 0)
+        if len(self.job.Model.OutList) == 2 :
+            self.job.Model.OutList[1].Placement.Rotation = FreeCAD.Rotation(Vector(1, 0, 0), 0)
+        FreeCAD.ActiveDocument.recompute()
         self.GuiBusy(False)
         self.ViewShape()
         self.resetSimulation = True
@@ -543,8 +602,8 @@ class PathSimulation:
         self.cutTool = None
 
     def RemoveInnerMaterial(self):
-        if self.cutMaterialIn is not None:
-            if self.isVoxel and self.cutMaterial is not None:
+        if self.isVoxel and self.cutMaterialIn is not None:
+            if self.cutMaterial is not None:
                 mesh = Mesh.Mesh()
                 mesh.addMesh(self.cutMaterial.Mesh)
                 mesh.addMesh(self.cutMaterialIn.Mesh)

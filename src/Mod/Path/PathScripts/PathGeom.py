@@ -198,9 +198,19 @@ def isHorizontal(obj):
 def commandEndPoint(cmd, defaultPoint = Vector(), X='X', Y='Y', Z='Z'):
     """commandEndPoint(cmd, [defaultPoint=Vector()], [X='X'], [Y='Y'], [Z='Z'])
     Extracts the end point from a Path Command."""
-    x = cmd.Parameters.get(X, defaultPoint.x)
-    y = cmd.Parameters.get(Y, defaultPoint.y)
-    z = cmd.Parameters.get(Z, defaultPoint.z)
+    #x = cmd.Parameters.get(X, defaultPoint.x)
+    #y = cmd.Parameters.get(Y, defaultPoint.y)
+    #z = cmd.Parameters.get(Z, defaultPoint.z)
+
+    x = cmd.Parameters.get(X)
+    if x is None: x = defaultPoint.x
+
+    y = cmd.Parameters.get(Y)
+    if y is None: y = defaultPoint.y
+
+    z = cmd.Parameters.get(Z)
+    if z is None: z = defaultPoint.z
+
     return Vector(x, y, z)
 
 def xy(point):
