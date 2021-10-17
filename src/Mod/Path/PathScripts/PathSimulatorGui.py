@@ -110,7 +110,8 @@ class PathSimulation:
         self.initdone = True
         self.moveStillActive = False
         self.path = None
-        self.rapidFeedrate = 120000/60000
+        self.contourFeedrate = 1000/60000
+        self.rapidFeedrate = 60000/60000
 
     def _populateJobSelection(self, form):
         # Make Job selection combobox
@@ -251,11 +252,11 @@ class PathSimulation:
         cmd = self.operation.Path.Commands[self.icmd]
         pathSolid = None
 
-        if cmd.Name in ['G0']:
+        if cmd.Name in ['G0', 'G00']:
             self.firstDrill = True
             self.curpos = self.RapidMove(cmd, self.curpos)            
  
-        if cmd.Name in ['G1', 'G2', 'G3']:
+        if cmd.Name in ['G1', 'G2', 'G3', 'G01', 'G02', 'G03']:
             self.firstDrill = True
             self.curpos = self.RapidMove(cmd, self.curpos)
 
@@ -355,54 +356,71 @@ class PathSimulation:
             self.PerformCutBoolean()
 
     def RapidMove(self, cmd, curpos):
-
-        newRot = math.degrees(curpos.Rotation.Angle)
-        a = cmd.Parameters.get('A')
-        if a is not None:
-            cmd.Parameters['Y'] = a
-            curpos.Base.y = newRot
+        curRot = math.degrees(curpos.Rotation.Angle)
 
         f = cmd.Parameters.get('F')
         if (f is not None) and (f > 0):
-            maxJump = f/60000 * self.simperiod
+            self.contourFeedrate = f/60000
+            maxJump = self.contourFeedrate * self.simperiod
         else:
-            if cmd.Name in ['G0']:
+            if cmd.Name in ['G0','G00']:
                 maxJump = self.rapidFeedrate * self.simperiod
             else:
-                maxJump = 2000/60000 * self.simperiod
+                maxJump = self.contourFeedrate * self.simperiod
+        maxRot = maxJump / (math.pi*25/180) # Asssume a nominal radius of 25mm
 
+        if cmd.Name in ['G2', 'G3', 'G02', 'G03']:
+            if self.moveStillActive is False :
 
-        if self.moveStillActive is False :
-            self.path = PathGeom.edgeForCmd(cmd, curpos.Base)  # hack to overcome occ bug
+                self.path = PathGeom.edgeForCmd(cmd, curpos.Base) 
+                if self.path is None:
+                    self.moveStillActive = False
+                    return curpos
 
-            if self.path is None:
+                curParameter = self.path.FirstParameter
+            else:
+                curParameter = self.path.Curve.parameter(curpos.Base)
+
+            if self.path.Length > maxJump:
+                maxParameterJump = self.path.getParameterByLength(maxJump)
+            else:
+                maxParameterJump = self.path.LastParameter
+
+            if (self.path.LastParameter - curParameter) <= maxParameterJump:
                 self.moveStillActive = False
-                if a is not None:
-                    cmd.Parameters['Y'] = 0
-                    curpos.Base.y = 0
-                return curpos
+                newpos = self.path.valueAt(self.path.LastParameter)
+            else:
+                self.moveStillActive = True
+                newpos = self.path.valueAt(curParameter + maxParameterJump)
+            newRot = curRot
+        else: # Just interpolate all axes togehter. There should not be G2 or G3 commands.
 
-            curParameter = self.path.FirstParameter
+            x = cmd.Parameters.get('X', curpos.Base.x)
+            y = cmd.Parameters.get('Y', curpos.Base.y)
+            z = cmd.Parameters.get('Z', curpos.Base.z)
+            a = cmd.Parameters.get('A', curRot)
 
-        else:
-            curParameter = self.path.Curve.parameter(curpos.Base)
+            dx = x - curpos.Base.x
+            dy = y - curpos.Base.y
+            dz = z - curpos.Base.z
+            da = a - curRot  
+            interations = max(abs(dx/maxJump),abs(dy/maxJump),abs(dz/maxJump),abs(da/maxRot))
 
-        if self.path.Length > maxJump:
-            maxParameterJump = self.path.getParameterByLength(maxJump)
-        else:
-            maxParameterJump = self.path.LastParameter
+            newpos = Vector(0,0,0)
 
-        if (self.path.LastParameter - curParameter) <= maxParameterJump:
-            self.moveStillActive = False
-            newpos = self.path.valueAt(self.path.LastParameter)
-        else:
-            self.moveStillActive = True
-            newpos = self.path.valueAt(curParameter + maxParameterJump)
-        
-        if a is not None:
-            newRot = newpos.y
-            newpos.y = 0
- 
+            if interations > 1:
+                newpos.x = curpos.Base.x + (dx/interations)
+                newpos.y = curpos.Base.y + (dy/interations)
+                newpos.z = curpos.Base.z + (dz/interations)
+                newRot = curRot + (da/interations)
+                self.moveStillActive = True
+
+            else:
+                self.moveStillActive = False
+                newpos.x = x
+                newpos.y = y
+                newpos.z = z
+                newRot = a
         
         return FreeCAD.Placement(newpos, FreeCAD.Rotation(Vector(1, 0, 0), newRot))
 
