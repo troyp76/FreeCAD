@@ -198,9 +198,19 @@ def isHorizontal(obj):
 def commandEndPoint(cmd, defaultPoint = Vector(), X='X', Y='Y', Z='Z'):
     """commandEndPoint(cmd, [defaultPoint=Vector()], [X='X'], [Y='Y'], [Z='Z'])
     Extracts the end point from a Path Command."""
-    x = cmd.Parameters.get(X, defaultPoint.x)
-    y = cmd.Parameters.get(Y, defaultPoint.y)
-    z = cmd.Parameters.get(Z, defaultPoint.z)
+    #x = cmd.Parameters.get(X, defaultPoint.x)
+    #y = cmd.Parameters.get(Y, defaultPoint.y)
+    #z = cmd.Parameters.get(Z, defaultPoint.z)
+
+    x = cmd.Parameters.get(X)
+    if x is None: x = defaultPoint.x
+
+    y = cmd.Parameters.get(Y)
+    if y is None: y = defaultPoint.y
+
+    z = cmd.Parameters.get(Z)
+    if z is None: z = defaultPoint.z
+
     return Vector(x, y, z)
 
 def xy(point):
@@ -350,7 +360,13 @@ def edgeForCmd(cmd, startPoint):
                 circleDirection = FreeCAD.Vector(0, 0, 1)
 
             if pointsCoincide(startPoint, endPoint, 0.001):
-                return Part.makeCircle(R, center, circleDirection)
+
+                degrees = 180 * getAngle(A) / math.pi
+                if cmd.Name in CmdMoveCW:
+                    degrees = degrees * -1
+
+                #Part.makeCircle(5, FreeCAD.Vector(0,5,2),FreeCAD.Vector(0, 0, -1) , 90, 89)
+                return Part.makeCircle(R, center, circleDirection, degrees, degrees)
             else:
                 return Part.Edge(Part.Arc(startPoint, midPoint, endPoint))
 
