@@ -377,21 +377,30 @@ class PathSimulation:
                     self.moveStillActive = False
                     return curpos
 
-                curParameter = self.path.FirstParameter
+                curParameter = 0
             else:
-                curParameter = self.path.Curve.parameter(curpos.Base)
+                curParameter = self.path.Curve.parameter(curpos.Base) - self.path.FirstParameter
+                if curParameter < 0:
+                    curParameter = curParameter + self.path.Curve.LastParameter
 
             if self.path.Length > maxJump:
-                maxParameterJump = self.path.getParameterByLength(maxJump)
+                maxParameterJump = self.path.Curve.parameterAtDistance(maxJump)
             else:
-                maxParameterJump = self.path.LastParameter
+                maxParameterJump = self.path.Curve.LastParameter
 
-            if (self.path.LastParameter - curParameter) <= maxParameterJump:
+            
+            if self.path.LastParameter < self.path.Curve.LastParameter:
+                endParameter = self.path.LastParameter
+            else:
+                endParameter = self.path.Curve.LastParameter
+
+
+            if ( endParameter - curParameter ) < maxParameterJump:
                 self.moveStillActive = False
                 newpos = self.path.valueAt(self.path.LastParameter)
             else:
                 self.moveStillActive = True
-                newpos = self.path.valueAt(curParameter + maxParameterJump)
+                newpos = self.path.valueAt(curParameter + maxParameterJump + self.path.FirstParameter)
             newRot = curRot
         else: # Just interpolate all axes togehter. There should not be G2 or G3 commands.
 
